@@ -1,6 +1,7 @@
 // lib/screens/auth/complete_profile_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:hapi/providers/navigation_provider.dart';
 import 'package:hapi/providers/user_provider.dart';
 import 'package:hapi/widgets/custom/hapi_button.dart';
@@ -17,12 +18,14 @@ class CompleteProfileScreen extends ConsumerStatefulWidget {
 
 class _CompleteProfileScreenState extends ConsumerState<CompleteProfileScreen> {
   String selectedGender = '';
+  bool _isLoading = false;
   final TextEditingController _nameController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    _nameController.text = "Alex";
+    final user = ref.read(userProvider);
+    _nameController.text = user.name.isNotEmpty ? user.name : '';
   }
 
   @override
@@ -93,35 +96,56 @@ class _CompleteProfileScreenState extends ConsumerState<CompleteProfileScreen> {
             const SizedBox(height: 50),
 
             // Next Button
-            HapiButton(
-              text: 'Next',
-              onPressed: () {
-                if (_nameController.text.isEmpty) {
-                  HapiSnackbar.showError(context, 'Please enter your name');
-                  return;
-                }
-                if (selectedGender.isEmpty) {
-                  HapiSnackbar.showError(context, 'Please select your gender');
-                  return;
-                }
-
-                final currentUser = ref.read(userProvider);
-                ref
-                    .read(userProvider.notifier)
-                    .updateUser(
-                      name: _nameController.text,
-                      gender: selectedGender,
-                      id: currentUser.id,
-                      email: currentUser.email,
-                    );
-
-                ref.read(navigationProvider.notifier).goToHome();
-              },
-            ),
+            _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : HapiButton(text: 'Next', onPressed: () => _saveProfile(user)),
           ],
         ),
       ),
     );
+  }
+
+  Future<void> _saveProfile(UserModel user) async {
+    if (_nameController.text.isEmpty) {
+      HapiSnackbar.showError(context, 'Please enter your name');
+      return;
+    }
+    if (selectedGender.isEmpty) {
+      HapiSnackbar.showError(context, 'Please select your gender');
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      // Save to Firestore
+      await FirebaseFirestore.instance.collection('users').doc(user.id).set({
+        'name': _nameController.text,
+        'gender': selectedGender,
+        'email': user.email,
+        'photoUrl': user.photoUrl,
+        'profileCompleted': true,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      // Update userProvider
+      ref
+          .read(userProvider.notifier)
+          .updateUser(
+            name: _nameController.text,
+            gender: selectedGender,
+            id: user.id,
+            email: user.email,
+            photoUrl: user.photoUrl,
+          );
+
+      // Navigate to home
+      ref.read(navigationProvider.notifier).goToHome();
+    } catch (e) {
+      HapiSnackbar.showError(context, 'Error saving profile: $e');
+    } finally {
+      setState(() => _isLoading = false);
+    }
   }
 
   Widget _buildProfileImage(UserModel user) {

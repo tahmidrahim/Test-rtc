@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:google_sign_in/google_sign_in.dart';
+import 'package:hapi/providers/navigation_provider.dart';
 import 'package:hapi/providers/user_provider.dart';
 import 'package:hapi/widgets/animated_avatar.dart';
 
@@ -22,7 +25,7 @@ class ProfileScreen extends ConsumerWidget {
                 children: [
                   _buildMainActionsCard(),
                   const SizedBox(height: 16),
-                  _buildSettingsCard(),
+                  _buildSettingsCard(context, ref),
                 ],
               ),
             ),
@@ -143,7 +146,7 @@ class ProfileScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildSettingsCard() {
+  Widget _buildSettingsCard(BuildContext context, WidgetRef ref) {
     return Card(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
       elevation: 0,
@@ -157,6 +160,13 @@ class ProfileScreen extends ConsumerWidget {
           ),
           _menuTile(Icons.email, "Feedback", Colors.grey),
           _menuTile(Icons.settings, "Settings", Colors.grey),
+          const Divider(height: 1, color: Colors.grey),
+          _menuTile(
+            Icons.logout,
+            "Logout",
+            Colors.red,
+            onTap: () => _logout(context, ref),
+          ),
         ],
       ),
     );
@@ -168,8 +178,10 @@ class ProfileScreen extends ConsumerWidget {
     Color color, {
     String? subtext,
     Widget? trailing,
+    VoidCallback? onTap,
   }) {
     return ListTile(
+      onTap: onTap,
       leading: Icon(icon, color: color),
       title: Text(title),
       trailing: Row(
@@ -202,5 +214,51 @@ class ProfileScreen extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  void _logout(BuildContext context, WidgetRef ref) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Logout'),
+        content: const Text('Are you sure you want to logout?'),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Logout', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      // Show loading
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Logging out...')));
+
+      try {
+        // Sign out from Firebase and Google
+        await FirebaseAuth.instance.signOut();
+        await GoogleSignIn().signOut();
+
+        // Clear user provider
+        ref
+            .read(userProvider.notifier)
+            .updateUser(name: '', gender: '', id: '', email: '', photoUrl: '');
+
+        // Navigate to login screen
+        ref.read(navigationProvider.notifier).goToLogin();
+      } catch (e) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error logging out: $e')));
+      }
+    }
   }
 }

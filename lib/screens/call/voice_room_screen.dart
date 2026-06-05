@@ -1,13 +1,18 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:hapi/providers/call_provider.dart';
 import 'package:hapi/providers/navigation_provider.dart';
 import 'package:hapi/providers/user_provider.dart';
+import 'package:hapi/screens/home/home_screen.dart';
 import 'package:hapi/services/agora_service.dart';
 import 'package:hapi/widgets/animated_avatar.dart';
+import 'package:hapi/widgets/custom/hapi_dialog.dart';
 import 'package:hapi/widgets/game/game_overlay.dart';
 import 'package:hapi/widgets/game/game_selector.dart';
-import 'package:hapi/widgets/custom/hapi_dialog.dart';
-import 'package:hapi/widgets/custom/hapi_loading.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 class VoiceRoomScreen extends ConsumerStatefulWidget {
@@ -26,17 +31,25 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
   bool _isSpeakerOn = true;
   bool _isConnected = false;
   String _connectionStatus = 'Connecting...';
+  String? _currentRoomId;
+  bool _isExiting = false;
+  int _participantCount = 1;
+  List<String> _participants = [];
 
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
   late AnimationController _micWaveController;
   late Animation<double> _micWaveAnimation;
+  StreamSubscription? _participantsSubscription;
 
   @override
   void initState() {
     super.initState();
     _initAnimations();
     _initVoiceChat();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(activeCallProvider.notifier).startCall(widget.roomId ?? 'call');
+    });
   }
 
   void _initAnimations() {
@@ -59,11 +72,33 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
     );
   }
 
+  void _listenToParticipants() {
+    final channelName = widget.roomId ?? _currentRoomId;
+    if (channelName == null) return;
+
+    _participantsSubscription = FirebaseFirestore.instance
+        .collection('rooms')
+        .where('roomId', isEqualTo: channelName)
+        .snapshots()
+        .listen((snapshot) {
+          if (snapshot.docs.isNotEmpty && mounted) {
+            final roomData = snapshot.docs.first.data();
+            final participants = List<String>.from(
+              roomData['participants'] ?? [],
+            );
+            setState(() {
+              _participants = participants;
+              _participantCount = participants.length;
+            });
+          }
+        });
+  }
+
   @override
   void dispose() {
     _pulseController.dispose();
     _micWaveController.dispose();
-    AgoraService.dispose();
+    _participantsSubscription?.cancel();
     super.dispose();
   }
 
@@ -79,8 +114,12 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
       await AgoraService.initialize();
 
       setState(() => _connectionStatus = 'Joining channel...');
+      final channelName =
+          widget.roomId ?? "room_${DateTime.now().millisecondsSinceEpoch}";
+      _currentRoomId = channelName;
+
       await AgoraService.joinChannel(
-        channelName: widget.roomId ?? "test_room",
+        channelName: channelName,
         token: "",
         uid: 0,
       );
@@ -90,12 +129,79 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
           _isConnected = true;
           _connectionStatus = 'Connected';
         });
+
+        if (widget.isCreating) {
+          await _saveRoomToFirestore(channelName);
+        } else {
+          await _joinExistingRoom(channelName);
+        }
+        _listenToParticipants();
       }
     } catch (e) {
       debugPrint("Detailed Error: $e");
       if (mounted) {
         setState(() => _connectionStatus = 'Connection failed');
       }
+    }
+  }
+
+  Future<void> _saveRoomToFirestore(String channelName) async {
+    final user = ref.read(userProvider);
+    await FirebaseFirestore.instance.collection('rooms').add({
+      'roomId': channelName,
+      'roomName': widget.roomId ?? 'My Room',
+      'hostId': user.id,
+      'hostName': user.name,
+      'hostPhotoUrl': user.photoUrl ?? '',
+      'participants': [user.id],
+      'isActive': true,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> _joinExistingRoom(String channelName) async {
+    final user = ref.read(userProvider);
+    try {
+      final querySnapshot = await FirebaseFirestore.instance
+          .collection('rooms')
+          .where('roomId', isEqualTo: channelName)
+          .where('isActive', isEqualTo: true)
+          .limit(1)
+          .get();
+      if (querySnapshot.docs.isNotEmpty) {
+        final doc = querySnapshot.docs.first;
+        await doc.reference.update({
+          'participants': FieldValue.arrayUnion([user.id]),
+        });
+      }
+    } catch (e) {
+      print('Error joining room: $e');
+    }
+  }
+
+  Future<void> _updateRoomOnExit() async {
+    final user = ref.read(userProvider);
+    try {
+      final querySnapshot = await FirebaseFirestore.instance
+          .collection('rooms')
+          .where('hostId', isEqualTo: user.id)
+          .where('isActive', isEqualTo: true)
+          .limit(1)
+          .get();
+      for (var doc in querySnapshot.docs) {
+        final participants = List<String>.from(doc['participants'] ?? []);
+        participants.remove(user.id);
+        if (participants.isEmpty) {
+          await doc.reference.delete();
+        } else {
+          await doc.reference.update({
+            'participants': participants,
+            'isActive': participants.isNotEmpty,
+          });
+        }
+      }
+    } catch (e) {
+      print('Error updating room on exit: $e');
     }
   }
 
@@ -111,7 +217,10 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
   }
 
   Future<void> _exitRoom() async {
+    _isExiting = true;
+    await _updateRoomOnExit();
     await AgoraService.dispose();
+    ref.read(activeCallProvider.notifier).endCall();
     if (mounted) {
       ref.read(navigationProvider.notifier).goToHome();
     }
@@ -121,9 +230,9 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
     HapiDialog.showConfirm(
       context: context,
       title: 'Exit Room',
-      message: 'Do you want to exit the room?',
+      message: 'Do you want to end the call?',
       confirmText: 'Exit',
-      cancelText: 'Keep',
+      cancelText: 'Stay',
     ).then((shouldExit) {
       if (shouldExit == true) {
         _exitRoom();
@@ -141,28 +250,41 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
     final user = ref.watch(userProvider);
     final bool isSpeaking = _isConnected && !_isMuted;
 
-    return Scaffold(
-      body: Stack(
-        children: [
-          _buildBackground(),
-          Container(color: Colors.black.withOpacity(0.4)),
-          SafeArea(
-            child: Column(
-              children: [
-                _buildHeader(user),
-                const SizedBox(height: 20),
-                _buildStatusIndicator(),
-                const SizedBox(height: 20),
-                _buildHostSection(user),
-                const SizedBox(height: 20),
-                _buildMicGrid(isSpeaking),
-                const Spacer(),
-                _buildChatAndAnnouncement(),
-                _buildBottomToolbar(),
-              ],
+    return PopScope(
+      canPop: false,
+      onPopInvoked: (didPop) async {
+        if (didPop) return;
+        if (mounted) {
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (context) => const HomeScreen()),
+            (route) => false,
+          );
+        }
+      },
+      child: Scaffold(
+        body: Stack(
+          children: [
+            _buildBackground(),
+            Container(color: Colors.black.withOpacity(0.4)),
+            SafeArea(
+              child: Column(
+                children: [
+                  _buildHeader(user),
+                  const SizedBox(height: 20),
+                  _buildStatusIndicator(),
+                  const SizedBox(height: 20),
+                  _buildHostSection(user),
+                  const SizedBox(height: 20),
+                  _buildMicGrid(isSpeaking),
+                  const Spacer(),
+                  _buildChatAndAnnouncement(),
+                  _buildBottomToolbar(),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -239,6 +361,24 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
                         fontSize: 10,
                       ),
                     ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1DE9B6),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        "$_participantCount",
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ],
@@ -299,6 +439,8 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
         itemCount: 8,
         itemBuilder: (context, index) {
           final isUserSeat = index == 0;
+          final hasParticipant = index < _participants.length;
+
           return Column(
             children: [
               AnimatedBuilder(
@@ -314,7 +456,7 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: Colors.black45,
+                        color: hasParticipant ? Colors.black45 : Colors.black26,
                         border: (isUserSeat && isSpeaking)
                             ? Border.all(
                                 color: const Color(0xFF1DE9B6),
@@ -333,25 +475,31 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
                               ]
                             : [],
                       ),
-                      child: (isUserSeat && isSpeaking)
-                          ? AnimatedBuilder(
-                              animation: _micWaveAnimation,
-                              builder: (context, child) => Opacity(
-                                opacity: _micWaveAnimation.value,
-                                child: const Icon(
-                                  Icons.mic,
-                                  color: Color(0xFF1DE9B6),
-                                  size: 26,
-                                ),
-                              ),
-                            )
-                          : Icon(
-                              (isUserSeat && _isMuted)
-                                  ? Icons.mic_off
-                                  : Icons.mic_none,
-                              color: (isUserSeat && _isMuted)
-                                  ? Colors.red
-                                  : Colors.white54,
+                      child: hasParticipant
+                          ? (isUserSeat && isSpeaking)
+                                ? AnimatedBuilder(
+                                    animation: _micWaveAnimation,
+                                    builder: (context, child) => Opacity(
+                                      opacity: _micWaveAnimation.value,
+                                      child: const Icon(
+                                        Icons.mic,
+                                        color: Color(0xFF1DE9B6),
+                                        size: 26,
+                                      ),
+                                    ),
+                                  )
+                                : Icon(
+                                    (isUserSeat && _isMuted)
+                                        ? Icons.mic_off
+                                        : Icons.mic_none,
+                                    color: (isUserSeat && _isMuted)
+                                        ? Colors.red
+                                        : Colors.white54,
+                                    size: 24,
+                                  )
+                          : const Icon(
+                              Icons.person_outline,
+                              color: Colors.white38,
                               size: 24,
                             ),
                     ),
@@ -360,7 +508,9 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
               ),
               const SizedBox(height: 8),
               Text(
-                isUserSeat ? "You" : "No.${index + 1}",
+                hasParticipant
+                    ? (isUserSeat ? "You" : "User ${index + 1}")
+                    : "No.${index + 1}",
                 style: TextStyle(
                   color: (isUserSeat && isSpeaking)
                       ? const Color(0xFF1DE9B6)

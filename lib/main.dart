@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:hapi/firebase_options.dart';
 import 'package:hapi/providers/navigation_provider.dart';
 import 'package:hapi/providers/user_provider.dart';
@@ -16,13 +18,75 @@ void main() async {
   runApp(const ProviderScope(child: MyApp()));
 }
 
-class MyApp extends ConsumerWidget {
+class MyApp extends ConsumerStatefulWidget {
   const MyApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends ConsumerState<MyApp> {
+  bool _isChecking = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkAuthState();
+  }
+
+  void _checkAuthState() {
+    FirebaseAuth.instance.authStateChanges().listen((User? user) async {
+      if (user != null) {
+        // Check Firestore for saved profile data
+        final doc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .get();
+
+        final savedName = doc.data()?['name'] ?? user.displayName ?? '';
+        final savedGender = doc.data()?['gender'] ?? '';
+        final profileCompleted = doc.data()?['profileCompleted'] == true;
+
+        final userModel = UserModel(
+          id: user.uid,
+          name: savedName,
+          email: user.email ?? '',
+          photoUrl: user.photoURL,
+          gender: savedGender,
+        );
+        
+        ref
+            .read(userProvider.notifier)
+            .updateUser(
+              name: userModel.name,
+              gender: userModel.gender,
+              id: userModel.id,
+              email: userModel.email,
+              photoUrl: userModel.photoUrl,
+            );
+
+        if (profileCompleted && savedGender.isNotEmpty) {
+          ref.read(navigationProvider.notifier).goToHome();
+        } else {
+          ref.read(navigationProvider.notifier).goToCompleteProfile();
+        }
+      } else {
+        ref.read(navigationProvider.notifier).goToLogin();
+      }
+      setState(() => _isChecking = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final route = ref.watch(navigationProvider);
     final user = ref.watch(userProvider);
+
+    if (_isChecking) {
+      return const MaterialApp(
+        home: Scaffold(body: Center(child: CircularProgressIndicator())),
+      );
+    }
 
     return MaterialApp(
       title: 'Hapi',
@@ -50,20 +114,15 @@ class MyApp extends ConsumerWidget {
       return VoiceRoomScreen(roomId: roomId, isCreating: isCreating);
     }
 
-    // Check if profile is complete before going to home
-    if (route == '/home' && (user.gender.isEmpty || user.name.isEmpty)) {
-      return const CompleteProfileScreen();
-    }
-
     switch (route) {
       case '/login':
-        return AuthScreen();
+        return const AuthScreen();
       case '/complete-profile':
         return const CompleteProfileScreen();
       case '/home':
         return const HomeScreen();
       default:
-        return AuthScreen();
+        return const AuthScreen();
     }
   }
 }

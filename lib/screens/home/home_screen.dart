@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:hapi/providers/navigation_provider.dart';
+import 'package:hapi/providers/user_provider.dart';
+
 import 'package:hapi/screens/game/game_screen.dart';
 import 'package:hapi/screens/home/profile_screen.dart';
 import 'package:hapi/screens/message/message_screen.dart';
-import 'package:hapi/widgets/custom/hapi_button.dart';
+import 'package:hapi/providers/call_provider.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 final dailyRewardShownProvider = StateProvider<bool>((ref) => false);
 
@@ -42,14 +46,26 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final activeCallRoomId = ref.watch(activeCallProvider);
+
     return Scaffold(
       backgroundColor: const Color(0xFFF1F5F9),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () =>
-            ref.read(navigationProvider.notifier).goToEditRoomName(),
-        backgroundColor: const Color(0xFF1DE9B6),
-        child: const Icon(Icons.mic, color: Colors.white),
-      ),
+      floatingActionButton: activeCallRoomId != null
+          ? FloatingActionButton(
+              onPressed: () {
+                ref
+                    .read(navigationProvider.notifier)
+                    .goToVoiceRoom(roomId: activeCallRoomId, isCreating: false);
+              },
+              backgroundColor: Colors.red,
+              child: const Icon(Icons.call, color: Colors.white),
+            )
+          : FloatingActionButton(
+              onPressed: () =>
+                  ref.read(navigationProvider.notifier).goToEditRoomName(),
+              backgroundColor: const Color(0xFF1DE9B6),
+              child: const Icon(Icons.mic, color: Colors.white),
+            ),
       body: _screens[_selectedTab],
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedTab,
@@ -65,60 +81,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 }
 
-class HomeContent extends StatefulWidget {
+class HomeContent extends ConsumerStatefulWidget {
   const HomeContent({super.key});
 
   @override
-  State<HomeContent> createState() => _HomeContentState();
+  ConsumerState<HomeContent> createState() => _HomeContentState();
 }
 
-class _HomeContentState extends State<HomeContent> {
+class _HomeContentState extends ConsumerState<HomeContent> {
   String _selectedCategory = 'Popular';
-
-  final List<Map<String, dynamic>> _liveRooms = [
-    {
-      'hostName': 'Cristiano Ronaldo',
-      'title': 'CR7 Fans Club',
-      'viewers': '1.2K',
-      'level': '39',
-      'imageUrl': 'https://randomuser.me/api/portraits/men/1.jpg',
-    },
-    {
-      'hostName': 'Lionel Messi',
-      'title': 'Messi Magic',
-      'viewers': '980',
-      'level': '36',
-      'imageUrl': 'https://randomuser.me/api/portraits/men/2.jpg',
-    },
-    {
-      'hostName': 'Neymar Jr',
-      'title': 'Brazilian Skills',
-      'viewers': '856',
-      'level': '32',
-      'imageUrl': 'https://randomuser.me/api/portraits/men/3.jpg',
-    },
-    {
-      'hostName': 'Kylian Mbappe',
-      'title': 'Speed King',
-      'viewers': '2.1K',
-      'level': '28',
-      'imageUrl': 'https://randomuser.me/api/portraits/men/4.jpg',
-    },
-    {
-      'hostName': 'Erling Haaland',
-      'title': 'Goal Machine',
-      'viewers': '1.8K',
-      'level': '27',
-      'imageUrl': 'https://randomuser.me/api/portraits/men/5.jpg',
-    },
-    {
-      'hostName': 'Kevin De Bruyne',
-      'title': 'Masterclass',
-      'viewers': '654',
-      'level': '33',
-      'imageUrl': 'https://randomuser.me/api/portraits/men/6.jpg',
-    },
-  ];
 
   @override
   Widget build(BuildContext context) {
@@ -151,7 +122,199 @@ class _HomeContentState extends State<HomeContent> {
         sliver: SliverToBoxAdapter(child: GameContent()),
       );
     }
-    return _buildLiveRoomsGrid();
+    return _buildLiveRoomsStream();
+  }
+
+  Widget _buildLiveRoomsStream() {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('rooms')
+          .where('isActive', isEqualTo: true)
+          .orderBy('createdAt', descending: true)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return SliverToBoxAdapter(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Text('Error: ${snapshot.error}'),
+              ),
+            ),
+          );
+        }
+
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const SliverToBoxAdapter(
+            child: Center(
+              child: Padding(
+                padding: EdgeInsets.all(32),
+                child: CircularProgressIndicator(),
+              ),
+            ),
+          );
+        }
+
+        final rooms = snapshot.data?.docs ?? [];
+
+        if (rooms.isEmpty) {
+          return SliverToBoxAdapter(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Column(
+                  children: [
+                    const Icon(Icons.people, size: 50, color: Colors.grey),
+                    const SizedBox(height: 5),
+                    const Text('No active rooms'),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }
+
+        return SliverPadding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          sliver: SliverGrid.builder(
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 0.85,
+            ),
+            itemCount: rooms.length,
+            itemBuilder: (context, index) {
+              final room = rooms[index];
+              final roomData = room.data() as Map<String, dynamic>;
+              return _buildRoomCard(room.id, roomData);
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildRoomCard(String roomId, Map<String, dynamic> room) {
+    final currentUserId = ref.read(userProvider).id;
+    final isHost = room['hostId'] == currentUserId;
+
+    return GestureDetector(
+      onTap: () {
+        ref
+            .read(navigationProvider.notifier)
+            .goToVoiceRoom(roomId: roomId, isCreating: false);
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Host Avatar or Image
+            Expanded(
+              child: ClipRRect(
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(16),
+                ),
+                child:
+                    room['hostPhotoUrl'] != null &&
+                        room['hostPhotoUrl'].toString().isNotEmpty
+                    ? CachedNetworkImage(
+                        imageUrl: room['hostPhotoUrl'],
+                        fit: BoxFit.cover,
+                        width: double.infinity,
+                        placeholder: (context, url) => Container(
+                          color: Colors.grey[200],
+                          child: const Icon(
+                            Icons.person,
+                            size: 40,
+                            color: Colors.grey,
+                          ),
+                        ),
+                        errorWidget: (context, url, error) => Container(
+                          color: Colors.grey[200],
+                          child: const Icon(
+                            Icons.person,
+                            size: 40,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      )
+                    : Container(
+                        color: Colors.grey[200],
+                        child: const Icon(
+                          Icons.person,
+                          size: 40,
+                          color: Colors.grey,
+                        ),
+                      ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        room['hostName'] ?? 'Unknown Host',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      if (isHost) ...[
+                        const SizedBox(width: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1DE9B6),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Text(
+                            'HOST',
+                            style: TextStyle(color: Colors.white, fontSize: 8),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    room['roomName'] ?? 'Room',
+                    style: const TextStyle(fontSize: 10, color: Colors.grey),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.people,
+                        size: 12,
+                        color: Color(0xFF1DE9B6),
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        '${(room['participants'] as List?)?.length ?? 1}',
+                        style: const TextStyle(fontSize: 10),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildAppBar() {
@@ -284,80 +447,6 @@ class _HomeContentState extends State<HomeContent> {
           ),
         );
       }).toList(),
-    );
-  }
-
-  Widget _buildLiveRoomsGrid() {
-    return SliverPadding(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      sliver: SliverGrid.builder(
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          mainAxisSpacing: 12,
-          crossAxisSpacing: 12,
-          childAspectRatio: 0.85,
-        ),
-        itemCount: _liveRooms.length,
-        itemBuilder: (context, index) => _buildRoomCard(_liveRooms[index]),
-      ),
-    );
-  }
-
-  Widget _buildRoomCard(Map<String, dynamic> room) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: ClipRRect(
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(16),
-              ),
-              child: Image.network(
-                room['imageUrl'],
-                fit: BoxFit.cover,
-                width: double.infinity,
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  room['hostName'],
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-                Text(
-                  room['title'],
-                  style: const TextStyle(fontSize: 10, color: Colors.grey),
-                  maxLines: 1,
-                ),
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.bar_chart,
-                      size: 14,
-                      color: Color(0xFF1DE9B6),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(room['viewers'], style: const TextStyle(fontSize: 10)),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
     );
   }
 }
