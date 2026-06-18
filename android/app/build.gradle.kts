@@ -25,8 +25,7 @@ android {
     defaultConfig {
         applicationId = "com.example.hapi"
         
-        //  minSdk = flutter.minSdkVersion
-        // 
+        // ✅ Set minSdk to 21 (not flutter.minSdkVersion)
         minSdk = flutter.minSdkVersion
         multiDexEnabled = true 
         
@@ -46,4 +45,10 @@ android {
 
 flutter {
     source = "../.."
+}
+
+
+dependencies {
+    implementation(files("../../lib/sdk/funint.online.aarr"))
+    implementation("androidx.multidex:multidex:2.0.1")
 }
