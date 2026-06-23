@@ -25,6 +25,9 @@ class AuthScreen extends ConsumerWidget {
 
               const Spacer(flex: 3),
 
+              // ✅ Guest Login Button
+              const SizedBox(height: 16),
+
               // Social Login Buttons
               HapiButton(
                 text: 'Facebook',
@@ -48,6 +51,15 @@ class AuthScreen extends ConsumerWidget {
               ),
 
               const SizedBox(height: 24),
+              HapiButton(
+                text: 'Continue as Guest',
+                onPressed: () =>
+                    ref.read(authProvider.notifier).signInAsGuest(),
+                icon: Icons.person_outline,
+                backgroundColor: const Color.fromARGB(255, 217, 79, 79),
+                isOutlined: false,
+              ),
+              SizedBox(height: 20),
 
               const Text(
                 'Or log in with',

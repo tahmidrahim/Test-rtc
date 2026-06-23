@@ -9,7 +9,6 @@ import 'package:hapi/screens/home/profile_screen.dart';
 import 'package:hapi/screens/message/message_screen.dart';
 import 'package:hapi/providers/call_provider.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:hapi/screens/test_screen.dart';
 
 final dailyRewardShownProvider = StateProvider<bool>((ref) => false);
 

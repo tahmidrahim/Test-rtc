@@ -48,7 +48,4 @@ flutter {
 }
 
 
-dependencies {
-    implementation(files("../../lib/sdk/funint.online.aarr"))
-    implementation("androidx.multidex:multidex:2.0.1")
-}
+

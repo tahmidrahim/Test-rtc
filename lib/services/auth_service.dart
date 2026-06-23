@@ -30,6 +30,16 @@ class AuthService {
     }
   }
 
+  // ✅ SIGN IN AS GUEST
+  Future<UserCredential?> signInAsGuest() async {
+    try {
+      return await _auth.signInAnonymously();
+    } catch (e) {
+      print('Guest sign in error: $e');
+      return null;
+    }
+  }
+
   // Logout
   Future<void> signOut() async {
     await _googleSignIn.signOut();
@@ -38,4 +48,7 @@ class AuthService {
 
   // Current user
   User? get currentUser => _auth.currentUser;
+
+  // ✅ CHECK IF USER IS GUEST
+  bool get isGuest => _auth.currentUser?.isAnonymous ?? false;
 }

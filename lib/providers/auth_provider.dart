@@ -58,6 +58,35 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
+  // ✅ SIGN IN AS GUEST
+  Future<void> signInAsGuest() async {
+    state = state.copyWith(isLoading: true);
+
+    try {
+      final userCredential = await _authService.signInAsGuest();
+
+      if (userCredential?.user != null) {
+        final user = userCredential!.user!;
+
+        _ref
+            .read(userProvider.notifier)
+            .updateUser(
+              name: 'Guest ${DateTime.now().millisecondsSinceEpoch}',
+              gender: '',
+              email: 'guest@hapi.app',
+              photoUrl: null,
+              id: user.uid,
+            );
+
+        _ref.read(navigationProvider.notifier).goToHome();
+      }
+
+      state = state.copyWith(isLoading: false);
+    } catch (e) {
+      state = state.copyWith(isLoading: false, error: e.toString());
+    }
+  }
+
   Future<void> signOut() async {
     await _authService.signOut();
     _ref.read(navigationProvider.notifier).goToLogin();
