@@ -13,6 +13,16 @@ class AnimatedAvatar extends StatelessWidget {
     this.animationSize = 80,
   });
 
+  Widget _buildPlaceholder() {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Color(0xFFE0E0E0),
+        shape: BoxShape.circle,
+      ),
+      child: Icon(Icons.person, size: radius * 1.2, color: Colors.grey[600]),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return SizedBox(
@@ -21,19 +31,29 @@ class AnimatedAvatar extends StatelessWidget {
       child: Stack(
         alignment: Alignment.center,
         children: [
-          // Animated border (behind the avatar)
+          // Animated border
           SvgaAnimation(
             assetPath: 'assets/animation_1778864976525.svga',
             width: animationSize,
             height: animationSize,
             loop: true,
           ),
-          // Profile picture (on top)
+          // Profile picture with fallback
           CircleAvatar(
             radius: radius,
-            backgroundImage: imageUrl != null && imageUrl!.isNotEmpty
-                ? NetworkImage(imageUrl!)
-                : const AssetImage('assets/profile.png') as ImageProvider,
+            backgroundColor: Colors.transparent,
+            child: ClipOval(
+              child: imageUrl != null && imageUrl!.isNotEmpty
+                  ? Image.network(
+                      imageUrl!,
+                      fit: BoxFit.cover,
+                      width: radius * 2,
+                      height: radius * 2,
+                      errorBuilder: (context, error, stackTrace) =>
+                          _buildPlaceholder(),
+                    )
+                  : _buildPlaceholder(),
+            ),
           ),
         ],
       ),

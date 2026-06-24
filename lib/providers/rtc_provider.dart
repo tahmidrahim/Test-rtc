@@ -1,154 +1,160 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../services/rtc/rtc_factory.dart';
+import '../services/rtc/rtc_interface.dart';
 
-import 'package:hapi/services/rtc_api_service.dart' as api;
-import 'package:hapi/services/rtc_media_service.dart';
-
-import 'package:hapi/services/rtc_signaling_service.dart';
-
-final rtcMediaProvider = Provider((ref) => RtcMediaService());
-final rtcSignalingProvider = Provider((ref) => RtcSignalingService());
-// ✅ Simple provider for the API service
-final rtcApiServiceProvider = Provider(
-  (ref) => api.RtcApiService(),
-); // ← USE api.
-
-// ✅ State provider for RTC state
-final rtcStateProvider = StateNotifierProvider<RtcNotifier, RtcState>((ref) {
-  return RtcNotifier();
+final rtcProvider = ChangeNotifierProvider<RTCProvider>((ref) {
+  return RTCProvider();
 });
 
-// ==================== STATE CLASS ====================
+class RTCProvider extends ChangeNotifier {
+  late IRTCService _rtcService;
 
-class RtcState {
-  final bool isLoading;
-  final String? error;
-  final String? userId;
-  final int? roomId;
-  final String? rtcToken;
-  final List<dynamic>? rooms;
-  final bool isConnected;
+  List<Map<String, dynamic>> _remoteUsers = [];
+  bool _isConnected = false;
+  bool _isMuted = false;
+  bool _isInitialized = false;
+  String? _errorMessage;
 
-  RtcState({
-    this.isLoading = false,
-    this.error,
-    this.userId,
-    this.roomId,
-    this.rtcToken,
-    this.rooms,
-    this.isConnected = false,
-  });
-
-  RtcState copyWith({
-    bool? isLoading,
-    String? error,
-    String? userId,
-    int? roomId,
-    String? rtcToken,
-    List<dynamic>? rooms,
-    bool? isConnected,
-  }) {
-    return RtcState(
-      isLoading: isLoading ?? this.isLoading,
-      error: error ?? this.error,
-      userId: userId ?? this.userId,
-      roomId: roomId ?? this.roomId,
-      rtcToken: rtcToken ?? this.rtcToken,
-      rooms: rooms ?? this.rooms,
-      isConnected: isConnected ?? this.isConnected,
-    );
+  RTCProvider() {
+    _rtcService = RTCFactory.create();
+    _listenToEvents();
   }
-}
 
-// ==================== NOTIFIER ====================
+  void _listenToEvents() {
+    _rtcService.events.listen((event) {
+      switch (event['event']) {
+        case 'initialized':
+          _isInitialized = true;
+          _errorMessage = null;
+          notifyListeners();
+          break;
 
-class RtcNotifier extends StateNotifier<RtcState> {
-  RtcNotifier() : super(RtcState());
+        case 'joinedChannel':
+          // Do nothing – connection status is based on remote users
+          break;
 
-  // 1. Verify API
-  Future<void> verifyApi() async {
-    state = state.copyWith(isLoading: true, error: null);
+        case 'remoteUserJoined':
+          final uid = event['uid'].toString();
+          final displayName = event['displayName'] ?? uid;
+          if (!_remoteUsers.any((u) => u['uid'] == uid)) {
+            _remoteUsers.add({
+              'uid': uid,
+              'displayName': displayName,
+              'isMuted': false,
+            });
+            // ✅ A real remote user has joined – we are now connected
+            _isConnected = true;
+            _errorMessage = null;
+            notifyListeners();
+          }
+          break;
+
+        case 'remoteUserLeft':
+          final uid = event['uid'].toString();
+          _remoteUsers.removeWhere((u) => u['uid'] == uid);
+          // ✅ If no remote users left, we are not connected
+          if (_remoteUsers.isEmpty) {
+            _isConnected = false;
+          }
+          notifyListeners();
+          break;
+
+        case 'userMuteAudio':
+          final uid = event['uid'].toString();
+          final muted = event['muted'] ?? false;
+          if (uid == 'local') {
+            _isMuted = muted;
+          } else {
+            final index = _remoteUsers.indexWhere((u) => u['uid'] == uid);
+            if (index != -1) {
+              _remoteUsers[index]['isMuted'] = muted;
+              notifyListeners();
+            }
+          }
+          break;
+
+        // ❌ Ignore connectionState – it gives false positives
+        case 'connectionState':
+          // Just log it for debugging, but don't change _isConnected
+          print('WebRTC connection state: ${event['state']}');
+          break;
+
+        case 'leftChannel':
+          _isConnected = false;
+          _remoteUsers.clear();
+          _isMuted = false;
+          _errorMessage = null;
+          notifyListeners();
+          break;
+
+        case 'error':
+          _errorMessage = event['message'] ?? 'Unknown error';
+          notifyListeners();
+          break;
+      }
+    });
+  }
+
+  Future<void> initializeRTC() async {
+    if (_isInitialized) return;
     try {
-      await api.RtcApiService.verifyApi(); // ← USE api.
-      state = state.copyWith(isLoading: false, isConnected: true);
+      await _rtcService.initialize();
     } catch (e) {
-      state = state.copyWith(isLoading: false, error: e.toString());
+      _errorMessage = 'Failed to initialize: $e';
+      _isInitialized = false;
+      notifyListeners();
+      rethrow;
     }
   }
 
-  // 2. Sync User
-  Future<void> syncUser(String name, String email) async {
-    state = state.copyWith(isLoading: true, error: null);
+  Future<void> joinRoom(String roomId) async {
+    if (!_isInitialized) await initializeRTC();
+    final uid = 'user_${DateTime.now().millisecondsSinceEpoch}';
     try {
-      final userId = 'user_${DateTime.now().millisecondsSinceEpoch}';
-      final data = await api.RtcApiService.syncUser(
-        // ← USE api.
-        externalUserId: userId,
-        name: name,
-        email: email,
-      );
-      final externalUserId = data['external_user_id'] ?? userId;
-      state = state.copyWith(isLoading: false, userId: externalUserId);
+      await _rtcService.joinChannel(roomId, '', uid);
     } catch (e) {
-      state = state.copyWith(isLoading: false, error: e.toString());
+      _errorMessage = 'Failed to join room: $e';
+      notifyListeners();
+      rethrow;
     }
   }
 
-  // 3. Create Room
-  Future<void> createRoom(String roomName) async {
-    if (state.userId == null) {
-      state = state.copyWith(error: '⚠️ Sync user first!');
-      return;
-    }
-    state = state.copyWith(isLoading: true, error: null);
+  Future<void> leaveRoom() async {
     try {
-      print('🔵🔵🔵 createRoom() called with userId: ${state.userId}');
-      final data = await api.RtcApiService.createRoom(
-        externalUserId: state.userId!,
-        name: roomName,
-      );
-      print('🔵🔵🔵 createRoom() response: $data');
-      final roomId = data['room']['id'] as int?;
-      state = state.copyWith(isLoading: false, roomId: roomId);
+      await _rtcService.leaveChannel();
     } catch (e) {
-      print('❌ createRoom() error: $e');
-      state = state.copyWith(isLoading: false, error: e.toString());
+      print('Error leaving room: $e');
     }
   }
 
-  // 4. Get RTC Token
-  Future<void> getToken() async {
-    if (state.userId == null || state.roomId == null) {
-      state = state.copyWith(error: '⚠️ Sync user and create room first!');
-      return;
-    }
-    state = state.copyWith(isLoading: true, error: null);
+  Future<void> toggleMute() async {
     try {
-      final data = await api.RtcApiService.getToken(
-        // ← USE api.
-        externalUserId: state.userId!,
-        roomId: state.roomId!,
-      );
-      final token = data['rtc_token'] as String?;
-      state = state.copyWith(isLoading: false, rtcToken: token);
+      _isMuted = !_isMuted;
+      await _rtcService.enableLocalAudio(!_isMuted);
+      notifyListeners();
     } catch (e) {
-      state = state.copyWith(isLoading: false, error: e.toString());
+      _isMuted = !_isMuted;
+      _errorMessage = 'Failed to toggle mute: $e';
+      notifyListeners();
     }
   }
 
-  // 5. List Rooms
-  Future<void> listRooms() async {
-    state = state.copyWith(isLoading: true, error: null);
-    try {
-      final data = await api.RtcApiService.listRooms(); // ← USE api.
-      final rooms = data['rooms'] as List<dynamic>?;
-      state = state.copyWith(isLoading: false, rooms: rooms);
-    } catch (e) {
-      state = state.copyWith(isLoading: false, error: e.toString());
-    }
+  void clearError() {
+    _errorMessage = null;
+    notifyListeners();
   }
 
-  // Reset
-  void reset() {
-    state = RtcState();
+  List<Map<String, dynamic>> get remoteUsers => _remoteUsers;
+  bool get isConnected => _isConnected;
+  bool get isMuted => _isMuted;
+  bool get isInitialized => _isInitialized;
+  String? get errorMessage => _errorMessage;
+  bool get hasError => _errorMessage != null;
+
+  @override
+  void dispose() {
+    _rtcService.dispose();
+    super.dispose();
   }
 }

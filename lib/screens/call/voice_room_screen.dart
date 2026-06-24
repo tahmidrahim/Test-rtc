@@ -4,11 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:hapi/providers/call_provider.dart';
 import 'package:hapi/providers/navigation_provider.dart';
+import 'package:hapi/providers/rtc_provider.dart';
 import 'package:hapi/providers/services_provider.dart';
 import 'package:hapi/providers/user_provider.dart';
 import 'package:hapi/screens/home/home_screen.dart';
-import 'package:hapi/services/rtc_api_service.dart';
-import 'package:hapi/services/rtc_media_service.dart';
 import 'package:hapi/widgets/custom/hapi_dialog.dart';
 import 'package:hapi/widgets/game/game_selector.dart';
 import 'package:hapi/widgets/voice_room_header.dart';
@@ -31,15 +30,16 @@ class VoiceRoomScreen extends ConsumerStatefulWidget {
 class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
     with TickerProviderStateMixin {
   // State variables
-  bool _isMuted = false;
   bool _isSpeakerOn = true;
-  bool _isConnected = false;
   String _connectionStatus = 'Connecting...';
   String? _currentRoomId;
   int _participantCount = 1;
   List<String> _participants = [];
   String? _floatingEmoji;
   Timer? _emojiTimer;
+  bool _joinedRoom = false;
+  // Add these with other state variables
+  List<Map<String, dynamic>> _firestoreParticipants = [];
 
   // Animation controllers
   late AnimationController _pulseController;
@@ -83,20 +83,45 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
     if (channelName == null) return;
 
     final roomService = ref.read(roomFirestoreServiceProvider);
-    _participantsSubscription = roomService.streamRoom(channelName).listen(
-      (snapshot) {
-        final roomData = snapshot.data() as Map<String, dynamic>?;
-        if (roomData != null && mounted) {
-          final participants = List<String>.from(
-            roomData['participants'] ?? [],
-          );
+    _participantsSubscription = roomService.streamRoom(channelName).listen((
+      snapshot,
+    ) async {
+      final roomData = snapshot.data() as Map<String, dynamic>?;
+      if (roomData != null && mounted) {
+        final participantIds = List<String>.from(
+          roomData['participants'] ?? [],
+        );
+
+        // Fetch user data for each participant
+        final List<Map<String, dynamic>> participantDetails = [];
+        for (final uid in participantIds) {
+          try {
+            final userDoc = await FirebaseFirestore.instance
+                .collection('users')
+                .doc(uid)
+                .get();
+            if (userDoc.exists) {
+              final data = userDoc.data()!;
+              participantDetails.add({
+                'uid': uid,
+                'displayName': data['name'] ?? 'User',
+                'photoUrl': data['photoUrl'] ?? '',
+                'isMuted': false,
+              });
+            }
+          } catch (e) {
+            debugPrint('Error fetching user: $e');
+          }
+        }
+
+        if (mounted) {
           setState(() {
-            _participants = participants;
-            _participantCount = participants.length;
+            _firestoreParticipants = participantDetails;
+            _participantCount = participantIds.length;
           });
         }
-      },
-    );
+      }
+    });
   }
 
   @override
@@ -117,66 +142,63 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
 
     try {
       setState(() => _connectionStatus = 'Initializing...');
-      final user = ref.read(userProvider);
-      
-      // Verify API connection
-      await RtcApiService.verifyApi();
-      print('✅ API verified');
 
-      // Initialize WebRTC media service
-      final mediaService = RtcMediaService();
-      await mediaService.getLocalAudio();
-      print('✅ Local audio initialized');
-
-      setState(() => _connectionStatus = 'Joining channel...');
       final channelName =
           widget.roomId ?? "room_${DateTime.now().millisecondsSinceEpoch}";
       _currentRoomId = channelName;
 
-      // Create room via API (only if creating)
+      // ✅ Save to Firestore FIRST before RTC
       if (widget.isCreating) {
-        final roomResponse = await RtcApiService.createRoom(
-          externalUserId: user.id,
-          name: channelName,
-          roomType: 'audio',
-        );
-        print('✅ Room created: ${roomResponse['room_id']}');
+        await _saveRoomToFirestore(channelName);
+      } else {
+        await _joinExistingRoom(channelName);
       }
+
+      // ✅ Start listening to participants
+      _listenToParticipants();
+
+      // ✅ Then try RTC (may fail but room is already saved)
+      final rtcNotifier = ref.read(rtcProvider.notifier);
+      await rtcNotifier.initializeRTC();
+
+      setState(() => _connectionStatus = 'Joining channel...');
+      await rtcNotifier.joinRoom(channelName);
 
       if (mounted) {
         setState(() {
-          _isConnected = true;
-          _connectionStatus = 'Connected';
+          _joinedRoom = true;
+          _connectionStatus = 'Waiting for participants...';
         });
-
-        if (widget.isCreating) {
-          await _saveRoomToFirestore(channelName);
-        } else {
-          await _joinExistingRoom(channelName);
-        }
-        _listenToParticipants();
       }
     } catch (e) {
       debugPrint("Detailed Error: $e");
       if (mounted) {
-        setState(() => _connectionStatus = 'Connection failed');
+        // ✅ Don't show connection failed if room was saved
+        // RTC failed but room exists in Firestore
+        setState(() {
+          _joinedRoom = false;
+          _connectionStatus = 'RTC unavailable';
+        });
       }
     }
   }
 
   Future<void> _saveRoomToFirestore(String channelName) async {
     final user = ref.read(userProvider);
-    
-    await FirebaseFirestore.instance.collection('rooms').add({
-      'roomId': channelName,
-      'roomName': widget.roomId ?? 'My Room',
-      'hostId': user.id,
-      'hostName': user.name,
-      'hostPhotoUrl': user.photoUrl ?? '',
-      'participants': [user.id],
-      'isActive': true,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
+    // Use SET with doc ID instead of ADD — so joiners can find it
+    await FirebaseFirestore.instance
+        .collection('rooms')
+        .doc(channelName) // ← doc ID = roomId
+        .set({
+          'roomId': channelName,
+          'roomName': widget.roomId ?? 'My Room',
+          'hostId': user.id,
+          'hostName': user.name,
+          'hostPhotoUrl': user.photoUrl ?? '',
+          'participants': [user.id],
+          'isActive': true,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
   }
 
   Future<void> _joinExistingRoom(String channelName) async {
@@ -191,48 +213,38 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
 
   Future<void> _updateRoomOnExit() async {
     final user = ref.read(userProvider);
+    final channelName = _currentRoomId ?? widget.roomId;
+    if (channelName == null) return;
     try {
-      final querySnapshot = await FirebaseFirestore.instance
+      final ref2 = FirebaseFirestore.instance
           .collection('rooms')
-          .where('hostId', isEqualTo: user.id)
-          .where('isActive', isEqualTo: true)
-          .limit(1)
-          .get();
-      for (var doc in querySnapshot.docs) {
-        final participants = List<String>.from(doc['participants'] ?? []);
-        participants.remove(user.id);
-        if (participants.isEmpty) {
-          await doc.reference.delete();
-        } else {
-          await doc.reference.update({
-            'participants': participants,
-            'isActive': participants.isNotEmpty,
-          });
-        }
+          .doc(channelName);
+      final doc = await ref2.get();
+      if (!doc.exists) return;
+      final participants = List<String>.from(doc['participants'] ?? []);
+      participants.remove(user.id);
+      if (participants.isEmpty) {
+        await ref2.delete();
+      } else {
+        await ref2.update({'participants': participants});
       }
     } catch (e) {
-      print('Error updating room on exit: $e');
+      print('Error on exit: $e');
     }
   }
 
-  void _toggleMute() async {
-    _isMuted = !_isMuted;
-    final mediaService = RtcMediaService();
-    mediaService.muteAudio(_isMuted);
-    setState(() {});
+  void _toggleMute() {
+    ref.read(rtcProvider.notifier).toggleMute();
   }
 
   void _toggleSpeaker() async {
     _isSpeakerOn = !_isSpeakerOn;
-    // Speaker control is handled by Flutter WebRTC internally
-    // _isSpeakerOn state is for UI display
     setState(() {});
   }
 
   Future<void> _exitRoom() async {
     await _updateRoomOnExit();
-    final mediaService = RtcMediaService();
-    await mediaService.dispose();
+    await ref.read(rtcProvider.notifier).leaveRoom();
     ref.read(activeCallProvider.notifier).endCall();
     if (mounted) {
       ref.read(navigationProvider.notifier).goToHome();
@@ -266,8 +278,18 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
     }
 
     const emojiOptions = [
-      '😀', '😂', '😍', '😎', '🥳', '👏', '🔥', '💯',
-      '❤️', '👍', '🙏', '🎉',
+      '😀',
+      '😂',
+      '😍',
+      '😎',
+      '🥳',
+      '👏',
+      '🔥',
+      '💯',
+      '❤️',
+      '👍',
+      '🙏',
+      '🎉',
     ];
 
     showModalBottomSheet<void>(
@@ -396,8 +418,50 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(userProvider);
-    final bool isSpeaking = _isConnected && !_isMuted;
+    final rtcState = ref.watch(rtcProvider);
+    final bool isSpeaking = rtcState.isConnected && !rtcState.isMuted;
 
+    // final remoteUsers = rtcState.remoteUsers;
+    // final localParticipant = ParticipantData(
+    //   uid: user.id,
+    //   displayName: 'You',
+    //   photoUrl: user.photoUrl,
+    //   isMuted: rtcState.isMuted,
+    // );
+
+    // final remoteParticipants = remoteUsers
+    //     .map(
+    //       (u) => ParticipantData(
+    //         uid: u['uid'] as String,
+    //         displayName: u['displayName'] as String,
+    //         photoUrl: u['photoUrl'] as String?,
+    //         isMuted: u['isMuted'] as bool? ?? false,
+    //       ),
+    //     )
+    //     .toList();
+
+    // final allParticipants = [localParticipant, ...remoteParticipants];
+
+    // ✅ Use Firestore participants (includes self + all joined users)
+    final allParticipants = _firestoreParticipants.map((p) {
+      final isLocal = p['uid'] == user.id;
+      return ParticipantData(
+        uid: p['uid'] as String,
+        displayName: isLocal ? 'You' : (p['displayName'] as String),
+        photoUrl: p['photoUrl'] as String?,
+        isMuted: isLocal ? rtcState.isMuted : (p['isMuted'] as bool? ?? false),
+      );
+    }).toList();
+
+    String displayStatus;
+    if (rtcState.isConnected) {
+      displayStatus = 'Connected';
+    } else if (_joinedRoom) {
+      displayStatus =
+          '${_firestoreParticipants.length} in room'; // ← shows count
+    } else {
+      displayStatus = _connectionStatus;
+    }
     return PopScope(
       canPop: false,
       onPopInvoked: (didPop) async {
@@ -431,8 +495,7 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
         );
 
         if (shouldEnd == true) {
-          final mediaService = RtcMediaService();
-          await mediaService.dispose();
+          await ref.read(rtcProvider.notifier).leaveRoom();
           ref.read(activeCallProvider.notifier).endCall();
         }
 
@@ -448,7 +511,6 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
         resizeToAvoidBottomInset: false,
         body: Stack(
           children: [
-            // Background image
             Positioned.fill(
               child: Container(
                 decoration: const BoxDecoration(
@@ -459,13 +521,9 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
                 ),
               ),
             ),
-
-            // Dark overlay
             Positioned.fill(
               child: Container(color: Colors.black.withOpacity(0.4)),
             ),
-
-            // Main content
             Positioned.fill(
               child: SafeArea(
                 bottom: false,
@@ -473,9 +531,11 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
                   children: [
                     VoiceRoomHeader(
                       user: user,
-                      participantCount: _participantCount,
-                      connectionStatus: _connectionStatus,
-                      isConnected: _isConnected,
+                      // participantCount: remoteUsers.length + 1,
+                      participantCount: _firestoreParticipants.length,
+                      connectionStatus:
+                          displayStatus, // ✅ use the computed status
+                      isConnected: rtcState.isConnected,
                       onSettingsTap: () {},
                       onShareTap: () {},
                       onExitTap: _showExitOptions,
@@ -488,9 +548,10 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
                         physics: const BouncingScrollPhysics(),
                         padding: const EdgeInsets.symmetric(horizontal: 4),
                         child: ParticipantsGrid(
-                          participants: _participants,
+                          participants:
+                              allParticipants, // ← was participantNames
                           isSpeaking: isSpeaking,
-                          isMuted: _isMuted,
+                          isMuted: rtcState.isMuted,
                           pulseAnimation: _pulseAnimation,
                           micWaveAnimation: _micWaveAnimation,
                         ),
@@ -501,8 +562,6 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
                 ),
               ),
             ),
-
-            // Bottom controls
             Positioned(
               left: 0,
               right: 0,
@@ -527,7 +586,7 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
                       ),
                       const SizedBox(height: 10),
                       VoiceRoomToolbar(
-                        isMuted: _isMuted,
+                        isMuted: rtcState.isMuted,
                         isSpeakerOn: _isSpeakerOn,
                         onSpeakerToggle: _toggleSpeaker,
                         onMicToggle: _toggleMute,
@@ -540,8 +599,6 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
                 ),
               ),
             ),
-
-            // Floating emoji
             if (_floatingEmoji != null)
               Positioned.fill(
                 child: IgnorePointer(
