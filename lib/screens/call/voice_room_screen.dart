@@ -33,8 +33,7 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
   bool _isSpeakerOn = true;
   String _connectionStatus = 'Connecting...';
   String? _currentRoomId;
-  int _participantCount = 1;
-  List<String> _participants = [];
+
   String? _floatingEmoji;
   Timer? _emojiTimer;
   bool _joinedRoom = false;
@@ -117,7 +116,6 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
         if (mounted) {
           setState(() {
             _firestoreParticipants = participantDetails;
-            _participantCount = participantIds.length;
           });
         }
       }
@@ -207,7 +205,7 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
       final roomService = ref.read(roomFirestoreServiceProvider);
       await roomService.addParticipant(channelName, user.id);
     } catch (e) {
-      print('Error joining room: $e');
+      debugPrint('Error joining room: $e');
     }
   }
 
@@ -229,7 +227,7 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
         await ref2.update({'participants': participants});
       }
     } catch (e) {
-      print('Error on exit: $e');
+      debugPrint('Error on exit: $e');
     }
   }
 
@@ -350,7 +348,7 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
                       child: Container(
                         alignment: Alignment.center,
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.08),
+                          color: Colors.white.withValues(alpha: 0.08),
                           borderRadius: BorderRadius.circular(18),
                           border: Border.all(color: Colors.white10),
                         ),
@@ -454,17 +452,16 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
     }).toList();
 
     String displayStatus;
-    if (rtcState.isConnected) {
-      displayStatus = 'Connected';
+    if (_firestoreParticipants.length > 1) {
+      displayStatus = '${_firestoreParticipants.length} in room';
     } else if (_joinedRoom) {
-      displayStatus =
-          '${_firestoreParticipants.length} in room'; // ← shows count
+      displayStatus = 'Waiting for participants...';
     } else {
       displayStatus = _connectionStatus;
     }
     return PopScope(
       canPop: false,
-      onPopInvoked: (didPop) async {
+      onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
 
         final shouldEnd = await showDialog<bool>(
@@ -500,8 +497,9 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
         }
 
         if (mounted) {
+          final ctx = context; // ← capture before async
           Navigator.pushAndRemoveUntil(
-            context,
+            ctx,
             MaterialPageRoute(builder: (context) => const HomeScreen()),
             (route) => false,
           );
@@ -522,7 +520,7 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
               ),
             ),
             Positioned.fill(
-              child: Container(color: Colors.black.withOpacity(0.4)),
+              child: Container(color: Colors.black.withValues(alpha: 0.4)),
             ),
             Positioned.fill(
               child: SafeArea(
@@ -572,7 +570,10 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    colors: [Colors.transparent, Colors.black.withOpacity(0.7)],
+                    colors: [
+                      Colors.transparent,
+                      Colors.black.withValues(alpha: 0.7),
+                    ],
                   ),
                 ),
                 child: SafeArea(
@@ -609,7 +610,7 @@ class _VoiceRoomScreenState extends ConsumerState<VoiceRoomScreen>
                       child: Container(
                         padding: const EdgeInsets.all(18),
                         decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.42),
+                          color: Colors.black.withValues(alpha: 0.42),
                           shape: BoxShape.circle,
                           border: Border.all(color: Colors.white24),
                         ),

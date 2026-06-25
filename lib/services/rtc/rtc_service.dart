@@ -1,12 +1,13 @@
 import 'dart:async';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'package:dart_jsonwebtoken/dart_jsonwebtoken.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'rtc_interface.dart';
 
 class RTCService implements IRTCService {
-  static const String _serverUrl = 'wss://chadnichok.com';
-  static const String _apiKey = 'ap_201fdec1ecebb8804d32b0a4'; // Api key
+  static const String _serverUrl = 'wss://hapi-4v10t8s8.livekit.cloud';
+  static const String _apiKey = 'APIfRDphoYKHKya';
+  static const String _apiSecret =
+      'UX2izhBne9oLPDZt2ZWT5Dd28ahFIAx5mqudo5jdZmb';
 
   Room? _room;
   EventsListener<RoomEvent>? _listener;
@@ -25,61 +26,25 @@ class RTCService implements IRTCService {
     _eventController.add({'event': 'initialized'});
   }
 
-  // Future<String> _fetchToken(String roomName, String identity) async {
-  //   final response = await http.post(
-  //     Uri.parse('https://chadnichok.com/auth/token'),
-  //     headers: {
-  //       'Authorization': 'Bearer $_apiKey',
-  //       'Content-Type': 'application/json',
-  //     },
-  //     body: jsonEncode({'room': roomName, 'identity': identity}),
-  //   );
-
-  //   if (response.statusCode == 200) {
-  //     final data = jsonDecode(response.body);
-  //     return data['token'] as String;
-  //   } else {
-  //     throw Exception(
-  //       'Token fetch failed: ${response.statusCode} ${response.body}',
-  //     );
-  //   }
-  // }
-  Future<String> _fetchToken(String roomName, String identity) async {
-    // Step 1: Login to get session token
-    final loginResponse = await http.post(
-      Uri.parse('https://chadnichok.com/auth/'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'email': 'tahmidrahim2003@gmail.com', // ←  portal email
-        'password': '01234567', // ← portal password
-      }),
-    );
-
-    if (loginResponse.statusCode != 200) {
-      throw Exception('Login failed: ${loginResponse.body}');
-    }
-
-    final sessionToken = jsonDecode(loginResponse.body)['token'];
-
-    // Step 2: Use session token to get room token
-    final tokenResponse = await http.post(
-      Uri.parse('https://chadnichok.com/auth/token'),
-
-      headers: {
-        'Authorization': 'Bearer $sessionToken',
-        'Content-Type': 'application/json',
+  // ✅ Generate LiveKit JWT token locally — no server needed
+  String _generateToken(String roomName, String identity) {
+    final now = DateTime.now();
+    final jwt = JWT({
+      'iss': _apiKey,
+      'sub': identity,
+      'iat': now.millisecondsSinceEpoch ~/ 1000,
+      'exp': now.add(const Duration(hours: 6)).millisecondsSinceEpoch ~/ 1000,
+      'nbf': now.millisecondsSinceEpoch ~/ 1000,
+      'video': {
+        'roomJoin': true,
+        'room': roomName,
+        'canPublish': true,
+        'canSubscribe': true,
+        'canPublishData': true,
       },
-      body: jsonEncode({'room': roomName, 'identity': identity}),
-    );
-
-    if (tokenResponse.statusCode == 200) {
-      final data = jsonDecode(tokenResponse.body);
-      return data['token'] as String;
-    } else {
-      throw Exception(
-        'Token fetch failed: ${tokenResponse.statusCode} ${tokenResponse.body}',
-      );
-    }
+      'name': identity,
+    });
+    return jwt.sign(SecretKey(_apiSecret));
   }
 
   @override
@@ -87,16 +52,23 @@ class RTCService implements IRTCService {
     if (!_isInitialized) await initialize();
 
     try {
-      final jwt = await _fetchToken(channelName, uid);
+      // ✅ Generate token locally
+      final jwt = _generateToken(channelName, uid);
+      print('✅ Token generated for room: $channelName, identity: $uid');
 
       _room = Room();
       _listener = _room!.createListener();
       _setupListeners();
 
+      // ✅ Connect to LiveKit Cloud
       await _room!.connect(_serverUrl, jwt);
-      await _room!.localParticipant?.setMicrophoneEnabled(true);
+      print('✅ Connected to LiveKit');
 
-      // Notify anyone already in room when we join
+      // ✅ Enable microphone
+      await _room!.localParticipant?.setMicrophoneEnabled(true);
+      print('✅ Microphone enabled');
+
+      // ✅ Handle participants already in room
       for (final p in _room!.remoteParticipants.values) {
         _eventController.add({
           'event': 'remoteUserJoined',
@@ -111,6 +83,7 @@ class RTCService implements IRTCService {
         'uid': uid,
       });
     } catch (e) {
+      print('❌ Join failed: $e');
       _eventController.add({'event': 'error', 'message': 'Join failed: $e'});
       rethrow;
     }
@@ -119,6 +92,7 @@ class RTCService implements IRTCService {
   void _setupListeners() {
     _listener!
       ..on<ParticipantConnectedEvent>((event) {
+        print('✅ Remote user joined: ${event.participant.identity}');
         _eventController.add({
           'event': 'remoteUserJoined',
           'uid': event.participant.identity,
@@ -128,6 +102,7 @@ class RTCService implements IRTCService {
         });
       })
       ..on<ParticipantDisconnectedEvent>((event) {
+        print('👋 Remote user left: ${event.participant.identity}');
         _eventController.add({
           'event': 'remoteUserLeft',
           'uid': event.participant.identity,
@@ -148,6 +123,7 @@ class RTCService implements IRTCService {
         });
       })
       ..on<RoomDisconnectedEvent>((_) {
+        print('🔌 Room disconnected');
         _eventController.add({'event': 'leftChannel'});
       });
   }

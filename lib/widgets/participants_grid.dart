@@ -44,7 +44,7 @@ class ParticipantsGrid extends StatelessWidget {
           crossAxisCount: 4,
           mainAxisSpacing: 15,
           crossAxisSpacing: 10,
-          childAspectRatio: 0.9,
+          childAspectRatio: 0.75,
         ),
         itemCount: totalSeats,
         itemBuilder: (context, index) {
@@ -69,8 +69,8 @@ class ParticipantsGrid extends StatelessWidget {
                   return Transform.scale(
                     scale: speaking ? pulseAnimation.value : 1.0,
                     child: Container(
-                      width: 56,
-                      height: 56,
+                      width: 64,
+                      height: 64,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         color: hasParticipant ? Colors.black45 : Colors.black26,
@@ -149,8 +149,8 @@ class ParticipantsGrid extends StatelessWidget {
       return AnimatedBuilder(
         animation: micWaveAnimation,
         builder: (context, child) => Container(
-          width: 56,
-          height: 56,
+          width: 64,
+          height: 64,
           color: Colors.black45,
           child: Opacity(
             opacity: micWaveAnimation.value,
@@ -162,16 +162,16 @@ class ParticipantsGrid extends StatelessWidget {
 
     if (photoUrl != null && photoUrl.isNotEmpty) {
       return SizedBox(
-        width: 56,
-        height: 56,
+        width: 64,
+        height: 64,
         child: CachedNetworkImage(
           imageUrl: photoUrl,
           fit: BoxFit.cover, // ← fills the circle
-          width: 56,
-          height: 56,
+          width: 64,
+          height: 64,
           placeholder: (context, url) => Container(
-            width: 56,
-            height: 56,
+            width: 64,
+            height: 64,
             color: Colors.black45,
             child: const Center(
               child: CircularProgressIndicator(
@@ -190,8 +190,8 @@ class ParticipantsGrid extends StatelessWidget {
 
   Widget _placeholderIcon(bool muted) {
     return Container(
-      width: 56,
-      height: 56,
+      width: 64,
+      height: 64,
       color: Colors.black45,
       child: Icon(
         muted ? Icons.mic_off : Icons.person,
