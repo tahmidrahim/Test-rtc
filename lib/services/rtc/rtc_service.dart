@@ -11,7 +11,6 @@ class RTCService implements IRTCService {
   static const String _serverUrl = RtcConfig.serverUrl;
   static const String _apiKey = RtcConfig.apiKey;
   static const String _apiSecret = RtcConfig.apiSecret;
-  // static const String _sdkTokenUrl = 'https://api.chadnichok.com/sdk/token';
   static const String _sdkTokenUrl = 'https://chadnichok.com/auth/sdkTokens';
   static const String _livekitTokenUrl =
       'https://chadnichok.com/auth/livekitTokens';

@@ -47,5 +47,12 @@ flutter {
     source = "../.."
 }
 
+dependencies {
+    implementation(files("../../lib/sdk/rtc-release.aar"))
+    implementation("io.github.webrtc-sdk:android:144.7559.09")
+    implementation("io.socket:socket.io-client:2.1.2") {
+        exclude(group = "org.json", module = "json")
+    }
+}
 
 
