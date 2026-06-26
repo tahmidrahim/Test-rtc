@@ -1,19 +1,18 @@
 class RtcConfig {
-  // WebRTC STUN Servers
-  static const List<String> stunServers = [
-    'stun:stun.l.google.com:19302',
-    'stun:stun1.l.google.com:19302',
-    'stun:stun2.l.google.com:19302',
-  ];
+  // ── Chadnichok RTC Server ─────────────────────────────
+  static const String serverUrl = 'wss://chadnichok.com';
+  static const String apiKey = 'ap_201fdec1ecebb8804d32b0a4';
+  static const String apiSecret =
+      'YOUR_APP_SECRET'; // ← set when developer provides
+  static const String sdkTokenUrl = 'https://chadnichok.com/auth/sdkTokens';
+  static const String livekitTokenUrl =
+      'https://chadnichok.com/auth/livekitTokens';
 
-  static List<Map<String, dynamic>> get iceServers {
-    return stunServers.map((url) => {'urls': url}).toList();
-  }
+  // ── SDK Headers ───────────────────────────────────────
+  static const String sdkClient = 'flutter';
+  static const String sdkVersion = '1.0.0';
 
-  // Feature flags
+  // ── Room settings ─────────────────────────────────────
+  static const int maxParticipants = 10;
   static const bool enableLogging = true;
-  static const bool enableSimulation = true; // For UI testing
-
-  // Room settings
-  static const int maxRemoteUsers = 10;
 }

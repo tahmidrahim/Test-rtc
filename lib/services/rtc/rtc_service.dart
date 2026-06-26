@@ -1,13 +1,20 @@
 import 'dart:async';
-import 'package:dart_jsonwebtoken/dart_jsonwebtoken.dart';
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:hapi/config/rtc_config.dart';
+import 'package:http/http.dart' as http;
 import 'package:livekit_client/livekit_client.dart';
 import 'rtc_interface.dart';
 
 class RTCService implements IRTCService {
-  static const String _serverUrl = 'wss://hapi-4v10t8s8.livekit.cloud';
-  static const String _apiKey = 'APIfRDphoYKHKya';
-  static const String _apiSecret =
-      'UX2izhBne9oLPDZt2ZWT5Dd28ahFIAx5mqudo5jdZmb';
+  // Chadnichok credentials
+  static const String _serverUrl = RtcConfig.serverUrl;
+  static const String _apiKey = RtcConfig.apiKey;
+  static const String _apiSecret = RtcConfig.apiSecret;
+  // static const String _sdkTokenUrl = 'https://api.chadnichok.com/sdk/token';
+  static const String _sdkTokenUrl = 'https://chadnichok.com/auth/sdkTokens';
+  static const String _livekitTokenUrl =
+      'https://chadnichok.com/auth/livekitTokens';
 
   Room? _room;
   EventsListener<RoomEvent>? _listener;
@@ -26,25 +33,73 @@ class RTCService implements IRTCService {
     _eventController.add({'event': 'initialized'});
   }
 
-  // ✅ Generate LiveKit JWT token locally — no server needed
-  String _generateToken(String roomName, String identity) {
-    final now = DateTime.now();
-    final jwt = JWT({
-      'iss': _apiKey,
-      'sub': identity,
-      'iat': now.millisecondsSinceEpoch ~/ 1000,
-      'exp': now.add(const Duration(hours: 6)).millisecondsSinceEpoch ~/ 1000,
-      'nbf': now.millisecondsSinceEpoch ~/ 1000,
-      'video': {
-        'roomJoin': true,
-        'room': roomName,
-        'canPublish': true,
-        'canSubscribe': true,
-        'canPublishData': true,
+  // ── Step 1: Get SDK access token using API key + secret ───
+  Future<String> _getAccessToken() async {
+    final response = await http.post(
+      Uri.parse(_sdkTokenUrl),
+      headers: {
+        'Content-Type': 'application/json',
+        'X-SDK-Client': 'flutter',
+        'X-SDK-Version': '1.0.0',
       },
-      'name': identity,
-    });
-    return jwt.sign(SecretKey(_apiSecret));
+      body: jsonEncode({'app_id': _apiKey, 'app_secret': _apiSecret}),
+    );
+
+    debugPrint('SDK token response: ${response.statusCode} ${response.body}');
+
+    if (response.statusCode != 200) {
+      throw Exception(
+        'SDK auth failed: ${response.statusCode} ${response.body}',
+      );
+    }
+
+    final data = jsonDecode(response.body);
+    final token = data['access_token'] ?? data['token'];
+    if (token == null) {
+      throw Exception('access_token not found in response: ${response.body}');
+    }
+    return token as String;
+  }
+
+  // ── Step 2: Get LiveKit room token using access token ─────
+  Future<String> _fetchToken(String roomName, String identity) async {
+    final accessToken = await _getAccessToken();
+    debugPrint('✅ SDK access token received');
+
+    final response = await http.post(
+      Uri.parse(_livekitTokenUrl),
+      headers: {
+        'Authorization': 'Bearer $accessToken',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'room': roomName,
+        'identity': identity,
+        'name': identity,
+      }),
+    );
+
+    debugPrint(
+      'LiveKit token response: ${response.statusCode} ${response.body}',
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception(
+        'LiveKit token failed: ${response.statusCode} ${response.body}',
+      );
+    }
+
+    final data = jsonDecode(response.body);
+    final token =
+        data['token'] ??
+        data['livekit_token'] ??
+        data['livekitToken'] ??
+        data['jwt'];
+
+    if (token == null) {
+      throw Exception('Token field not found in response: ${response.body}');
+    }
+    return token as String;
   }
 
   @override
@@ -52,23 +107,20 @@ class RTCService implements IRTCService {
     if (!_isInitialized) await initialize();
 
     try {
-      // ✅ Generate token locally
-      final jwt = _generateToken(channelName, uid);
-      print('✅ Token generated for room: $channelName, identity: $uid');
+      final jwt = await _fetchToken(channelName, uid);
+      debugPrint('✅ LiveKit token received');
 
       _room = Room();
       _listener = _room!.createListener();
       _setupListeners();
 
-      // ✅ Connect to LiveKit Cloud
       await _room!.connect(_serverUrl, jwt);
-      print('✅ Connected to LiveKit');
+      debugPrint(' Connected to $_serverUrl');
 
-      // ✅ Enable microphone
       await _room!.localParticipant?.setMicrophoneEnabled(true);
-      print('✅ Microphone enabled');
+      debugPrint(' Microphone enabled');
 
-      // ✅ Handle participants already in room
+      // Handle participants already in room
       for (final p in _room!.remoteParticipants.values) {
         _eventController.add({
           'event': 'remoteUserJoined',
@@ -83,7 +135,7 @@ class RTCService implements IRTCService {
         'uid': uid,
       });
     } catch (e) {
-      print('❌ Join failed: $e');
+      debugPrint('❌ Join failed: $e');
       _eventController.add({'event': 'error', 'message': 'Join failed: $e'});
       rethrow;
     }
@@ -92,7 +144,7 @@ class RTCService implements IRTCService {
   void _setupListeners() {
     _listener!
       ..on<ParticipantConnectedEvent>((event) {
-        print('✅ Remote user joined: ${event.participant.identity}');
+        debugPrint('✅ Remote user joined: ${event.participant.identity}');
         _eventController.add({
           'event': 'remoteUserJoined',
           'uid': event.participant.identity,
@@ -102,7 +154,7 @@ class RTCService implements IRTCService {
         });
       })
       ..on<ParticipantDisconnectedEvent>((event) {
-        print('👋 Remote user left: ${event.participant.identity}');
+        debugPrint('👋 Remote user left: ${event.participant.identity}');
         _eventController.add({
           'event': 'remoteUserLeft',
           'uid': event.participant.identity,
@@ -123,7 +175,7 @@ class RTCService implements IRTCService {
         });
       })
       ..on<RoomDisconnectedEvent>((_) {
-        print('🔌 Room disconnected');
+        debugPrint('🔌 Room disconnected');
         _eventController.add({'event': 'leftChannel'});
       });
   }
