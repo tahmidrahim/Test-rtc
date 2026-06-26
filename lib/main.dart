@@ -54,7 +54,7 @@ class _MyAppState extends ConsumerState<MyApp> {
           photoUrl: user.photoURL,
           gender: savedGender,
         );
-        
+
         ref
             .read(userProvider.notifier)
             .updateUser(

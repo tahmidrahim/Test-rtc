@@ -58,8 +58,9 @@ class FunintRtcService implements IRTCService {
 
     final data = jsonDecode(response.body);
     final token = data['access_token'] ?? data['accessToken'] ?? data['token'];
-    if (token == null)
+    if (token == null) {
       throw Exception('No token in response: ${response.body}');
+    }
     return token as String;
   }
 

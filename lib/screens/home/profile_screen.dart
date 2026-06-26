@@ -189,7 +189,7 @@ class ProfileScreen extends ConsumerWidget {
         children: [
           if (subtext != null)
             Text(subtext, style: const TextStyle(color: Colors.grey)),
-          if (trailing != null) trailing,
+          ?trailing,
           const Icon(Icons.chevron_right, color: Colors.grey, size: 20),
         ],
       ),

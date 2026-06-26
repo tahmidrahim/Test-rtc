@@ -25,7 +25,7 @@ android {
     defaultConfig {
         applicationId = "com.example.hapi"
         
-        // ✅ Set minSdk to 21 (not flutter.minSdkVersion)
+        
         minSdk = flutter.minSdkVersion
         multiDexEnabled = true 
         
@@ -48,11 +48,11 @@ flutter {
 }
 
 dependencies {
-    implementation(files("../../lib/sdk/rtc-release.aar"))
-    implementation("io.github.webrtc-sdk:android:144.7559.09")
-    implementation("io.socket:socket.io-client:2.1.2") {
-        exclude(group = "org.json", module = "json")
-    }
+    implementation(files("../../lib/sdk/rtc-update.aar"))
 }
 
-
+configurations.all {
+    exclude(group = "io.github.webrtc-sdk", module = "android")
+    exclude(group = "io.socket", module = "socket.io-client")
+    exclude(group = "io.socket", module = "engine.io-client")
+}

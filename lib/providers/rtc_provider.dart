@@ -10,7 +10,7 @@ final rtcProvider = ChangeNotifierProvider<RTCProvider>((ref) {
 class RTCProvider extends ChangeNotifier {
   late IRTCService _rtcService;
 
-  List<Map<String, dynamic>> _remoteUsers = [];
+  final List<Map<String, dynamic>> _remoteUsers = [];
   bool _isConnected = false;
   bool _isMuted = false;
   bool _isInitialized = false;

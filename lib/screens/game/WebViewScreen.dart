@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hapi/widgets/custom/hapi_dialog.dart';
-import 'package:hapi/widgets/custom/hapi_loading.dart';
 
 class GameWebViewScreen extends StatefulWidget {
   final String gameName;

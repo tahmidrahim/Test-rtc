@@ -4,7 +4,7 @@ class CharacterCounter extends StatelessWidget {
   final int currentLength;
   final int maxLength;
 
-  const CharacterCounter({
+  const CharacterCounter({super.key, 
     required this.currentLength,
     required this.maxLength,
   });

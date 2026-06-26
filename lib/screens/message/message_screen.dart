@@ -1,6 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:hapi/widgets/custom/hapi_avatar.dart';
-import 'package:hapi/widgets/custom/hapi_button.dart';
 
 class MessageScreen extends StatelessWidget {
   const MessageScreen({super.key});

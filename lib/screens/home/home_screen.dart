@@ -3,12 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:hapi/providers/navigation_provider.dart';
 import 'package:hapi/providers/user_provider.dart';
-
 import 'package:hapi/screens/game/game_screen.dart';
 import 'package:hapi/screens/home/profile_screen.dart';
 import 'package:hapi/screens/message/message_screen.dart';
 import 'package:hapi/providers/call_provider.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:hapi/screens/rtc/rtc_test_screen.dart';
 
 final dailyRewardShownProvider = StateProvider<bool>((ref) => false);
 
@@ -21,7 +21,7 @@ class HomeScreen extends ConsumerStatefulWidget {
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   int _selectedTab = 0;
-  String _selectedCategory = 'Popular';
+  final String _selectedCategory = 'Popular';
 
   final List<Widget> _screens = [
     const HomeContent(),
@@ -50,22 +50,69 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
     return Scaffold(
       backgroundColor: const Color(0xFFF1F5F9),
-      floatingActionButton: activeCallRoomId != null
-          ? FloatingActionButton(
+
+      appBar: AppBar(
+        title: const Text("Hapi"),
+        backgroundColor: const Color(0xFF1DE9B6),
+        elevation: 0,
+        actions: [
+          // ❌ Removed the test button from AppBar
+          IconButton(
+            icon: const Icon(Icons.search, color: Colors.white),
+            onPressed: () {},
+          ),
+        ],
+      ),
+
+      // ✅ New floatingActionButton with Stack for two FABs
+      floatingActionButton: Stack(
+        alignment: Alignment.bottomRight,
+        children: [
+          // Existing FAB (mic or call)
+          Positioned(
+            bottom: 0,
+            right: 0,
+            child: activeCallRoomId != null
+                ? FloatingActionButton(
+                    onPressed: () {
+                      ref
+                          .read(navigationProvider.notifier)
+                          .goToVoiceRoom(
+                            roomId: activeCallRoomId,
+                            isCreating: false,
+                          );
+                    },
+                    backgroundColor: Colors.red,
+                    child: const Icon(Icons.call, color: Colors.white),
+                  )
+                : FloatingActionButton(
+                    onPressed: () => ref
+                        .read(navigationProvider.notifier)
+                        .goToEditRoomName(),
+                    backgroundColor: const Color(0xFF1DE9B6),
+                    child: const Icon(Icons.mic, color: Colors.white),
+                  ),
+          ),
+          // ✅ New test FAB positioned above the existing one
+          Positioned(
+            bottom: 80, // adjust spacing as needed
+            right: 0,
+            child: FloatingActionButton(
               onPressed: () {
-                ref
-                    .read(navigationProvider.notifier)
-                    .goToVoiceRoom(roomId: activeCallRoomId, isCreating: false);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const RtcTestScreen()),
+                );
               },
-              backgroundColor: Colors.red,
-              child: const Icon(Icons.call, color: Colors.white),
-            )
-          : FloatingActionButton(
-              onPressed: () =>
-                  ref.read(navigationProvider.notifier).goToEditRoomName(),
-              backgroundColor: const Color(0xFF1DE9B6),
-              child: const Icon(Icons.mic, color: Colors.white),
+              backgroundColor: Colors.orange,
+              heroTag: 'test_fab', // required to avoid hero conflict
+              tooltip: 'RTC Test Screen',
+              child: const Icon(Icons.science),
             ),
+          ),
+        ],
+      ),
+
       body: _screens[_selectedTab],
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedTab,
@@ -95,7 +142,6 @@ class _HomeContentState extends ConsumerState<HomeContent> {
   Widget build(BuildContext context) {
     return CustomScrollView(
       slivers: [
-        _buildAppBar(),
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.all(12.0),
@@ -314,19 +360,6 @@ class _HomeContentState extends ConsumerState<HomeContent> {
           ],
         ),
       ),
-    );
-  }
-
-  Widget _buildAppBar() {
-    return SliverAppBar(
-      floating: true,
-      backgroundColor: const Color(0xFF1DE9B6),
-      elevation: 0,
-      title: const Text("Hapi", style: TextStyle(fontWeight: FontWeight.bold)),
-      actions: [
-        IconButton(icon: const Icon(Icons.search), onPressed: () {}),
-        const SizedBox(width: 8),
-      ],
     );
   }
 

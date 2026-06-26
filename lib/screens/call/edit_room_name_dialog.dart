@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hapi/providers/navigation_provider.dart';
 import 'package:hapi/providers/user_provider.dart';
 import 'package:hapi/widgets/custom/hapi_button.dart';
-import 'package:hapi/widgets/custom/hapi_text_field.dart';
 import 'package:hapi/widgets/custom/hapi_avatar.dart';
 
 class EditRoomNameScreen extends ConsumerStatefulWidget {
